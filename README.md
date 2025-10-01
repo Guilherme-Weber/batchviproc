@@ -1,15 +1,20 @@
 # Desktop batch video compression tool
 
-[Download EXE file](https://github.com/kachurovskiy/batchviproc/raw/main/batchviproc%201.0.5.exe)
+[Download EXE file](https://github.com/Guilherme-Weber/batchviproc/raw/main/batchviproc%201.0.5.exe)
+[Download EXE file](https://github.com/Guilherme-Weber/batchviproc/raw/main/batchviproc%201.0.5-opencl.exe)
 
 <img width="590" alt="batchviproc" src="https://user-images.githubusercontent.com/517919/148660250-5d73c5e8-d1ac-4918-a52e-e26d53000733.png">
+
+
+This is a fork that adds OpenCL lookahead acceleration using the GPU and changes the preset from slow to veryslow.
+The OpenCL lookahead acceleration speeds things up a little bit and the veryslow preset decrease the filesize.
 
 ## Development
 
 Make sure you have Git, Node JS and NPM installed.
 
 ```
-git clone https://github.com/kachurovskiy/batchviproc.git
+git clone https://github.com/Guilherme-Weber/batchviproc.git
 cd batchviproc
 npm install
 npm start
