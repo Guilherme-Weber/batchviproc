@@ -80,7 +80,7 @@ pub fn parse_chunk(
     text.push_str(chunk);
 
     // Keep an unterminated last line for the next chunk so lines split across reads still match.
-    let complete_len = text.rfind(['\r', '\n']).map(|i| i + 1).unwrap_or(0);
+    let complete_len = text.rfind(['\r', '\n']).map_or(0, |i| i + 1);
     diag.carry = text[complete_len..].to_string();
     if diag.carry.len() > 4096 {
         diag.carry.clear();

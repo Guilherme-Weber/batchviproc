@@ -15,8 +15,7 @@ mod taskbar;
 fn main() -> Result<(), slint::PlatformError> {
     // Same folder earlier versions used (%APPDATA%\batchviproc), so processed history carries over.
     let data_dir = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+        .map_or_else(std::env::temp_dir, std::path::PathBuf::from)
         .join("batchviproc");
     let _ = std::fs::create_dir_all(&data_dir);
     logfile::install_panic_hook(data_dir.join("logs"));
@@ -31,5 +30,5 @@ fn main() -> Result<(), slint::PlatformError> {
         return Ok(());
     };
 
-    app::run(data_dir, app::Launch::from_args(std::env::args().skip(1)))
+    app::run(&data_dir, app::Launch::from_args(std::env::args().skip(1)))
 }

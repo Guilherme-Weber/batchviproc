@@ -126,7 +126,7 @@ fn map_nvenc_preset(ui_preset: &str) -> &'static str {
 }
 
 fn s(items: &[&str]) -> Vec<String> {
-    items.iter().map(|v| v.to_string()).collect()
+    items.iter().map(ToString::to_string).collect()
 }
 
 pub fn build_ffmpeg_args(input: &Path, tmp: &Path, options: &Options, mode: Mode) -> Vec<String> {
@@ -265,7 +265,7 @@ mod tests {
     /// Writes args for every option combination to $ARGS_DUMP (used for parity checks
     /// against the old Electron implementation). Run with `cargo test -- --ignored`.
     #[test]
-    #[ignore]
+    #[ignore = "writes a parity dump; needs ARGS_DUMP"]
     fn dump_all_args() {
         let Ok(out) = std::env::var("ARGS_DUMP") else { return };
         let mut rows = Vec::new();

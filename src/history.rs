@@ -82,7 +82,7 @@ impl History {
             self.needs_rewrite = false;
         } else {
             // The file has no trailing newline, so separate from existing content first.
-            let has_content = std::fs::metadata(&self.path).map(|m| m.len() > 0).unwrap_or(false);
+            let has_content = std::fs::metadata(&self.path).is_ok_and(|m| m.len() > 0);
             let mut data = String::with_capacity(self.unsaved.len() * 65);
             for (i, h) in self.unsaved.iter().enumerate() {
                 if has_content || i > 0 {

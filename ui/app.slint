@@ -1,6 +1,6 @@
 // batchviproc interface: Windows 11 Fluent design (dark), rendered by Slint's software renderer.
 
-import { Button, ComboBox, ProgressIndicator, ListView, ScrollView, Palette } from "std-widgets.slint";
+import { Button, ComboBox, ListView, ScrollView } from "std-widgets.slint";
 
 export struct WorkerRow {
     title: string,
@@ -24,12 +24,17 @@ export global Theme {
     out property <brush> text: #FFFFFF;
     out property <brush> text-secondary: #FFFFFFC9;
     out property <brush> text-tertiary: #FFFFFF8A;
-    out property <brush> accent: Palette.accent-background;
+    // One accent (Windows 11 dark accent text/fill) for links, progress, focus and "running".
+    out property <color> accent: #60CDFF;
+    out property <color> accent-hover: #99EBFF;
+    out property <brush> well-background: #1C1C1C;
     out property <color> success: #6CCB5F;
     out property <color> caution: #FCE100;
     out property <color> critical: #FF99A4;
     out property <color> neutral: #9D9D9D;
+    // Radius scale: cards and tiles 8px, inner wells and focus rings 4px, bars and pills fully round.
     out property <length> radius: 8px;
+    out property <length> radius-small: 4px;
 }
 
 // Icon from the Segoe Fluent Icons font. Decorative: hidden from screen readers.
@@ -74,7 +79,7 @@ component StatusPill inherits Rectangle {
         : (status == "stopping" || status == "paused") ? Theme.caution
         : (status == "ready" || status == "done") ? Theme.success
         : status == "idle" ? Theme.neutral
-        : #60CDFF;
+        : Theme.accent;
     background: tone.with-alpha(0.12);
     border-color: tone.with-alpha(0.45);
     border-width: 1px;
@@ -102,9 +107,9 @@ component IconTile inherits Rectangle {
     in property <string> glyph;
     width: 44px;
     height: 44px;
-    border-radius: 8px;
-    background: #60CDFF1F;
-    Glyph { glyph: root.glyph; font-size: 20px; color: #60CDFF; }
+    border-radius: Theme.radius;
+    background: Theme.accent.with-alpha(0.12);
+    Glyph { glyph: root.glyph; font-size: 20px; color: Theme.accent; }
 }
 
 // Text-style button: reachable with Tab, activated with Enter/Space, announced as a button.
@@ -116,15 +121,15 @@ component LinkText inherits Rectangle {
     accessible-label: root.text;
     accessible-enabled: root.enabled;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
-    border-radius: 4px;
+    border-radius: Theme.radius-small;
     border-width: focus.has-focus ? 1px : 0px;
-    border-color: #60CDFF;
+    border-color: Theme.accent;
     HorizontalLayout {
         padding-left: 4px;
         padding-right: 4px;
         Text {
             text: root.text;
-            color: !root.enabled ? Theme.text-tertiary : touch.has-hover ? #99EBFF : #60CDFF;
+            color: !root.enabled ? Theme.text-tertiary : touch.has-hover ? Theme.accent-hover : Theme.accent;
             font-size: 13px;
             vertical-alignment: center;
             accessible-role: none;
@@ -159,12 +164,18 @@ component SettingField inherits VerticalLayout {
     in property <bool> enabled: true;
     callback changed();
     spacing: 6px;
+    // Equal columns regardless of label/hint length, so the dropdowns line up.
+    preferred-width: 200px;
+    min-width: 0px;
+    horizontal-stretch: 1;
     HorizontalLayout {
         spacing: 8px;
         Glyph { glyph: root.glyph; font-size: 14px; color: Theme.text-secondary; width: 16px; }
         Text { text: root.label; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
     }
     ComboBox {
+        // The widget's own minimum follows its text; ignoring it keeps both columns equal.
+        min-width: 0px;
         model: root.model;
         current-index <=> root.current-index;
         enabled: root.enabled;
@@ -173,25 +184,25 @@ component SettingField inherits VerticalLayout {
     Text { text: root.hint; font-size: 12px; color: Theme.text-tertiary; wrap: word-wrap; }
 }
 
-component MetricTile inherits Card {
+// One figure inside the metrics card: icon + label, value underneath.
+component MetricCell inherits VerticalLayout {
     in property <Metric> metric;
-    pad: 14px;
-    gap: 6px;
-    // Same preferred width and stretch for every tile, so each row splits evenly.
-    preferred-width: 200px;
+    spacing: 4px;
+    // Same preferred width and stretch for every cell, so each row splits evenly.
+    preferred-width: 100px;
     min-width: 0px;
     horizontal-stretch: 1;
     HorizontalLayout {
-        spacing: 8px;
-        Glyph { glyph: root.metric.glyph; font-size: 13px; color: Theme.text-tertiary; width: 14px; }
+        spacing: 6px;
+        Glyph { glyph: root.metric.glyph; font-size: 12px; color: Theme.text-tertiary; width: 14px; }
         Text { text: root.metric.label; font-size: 12px; color: Theme.text-secondary; vertical-alignment: center; overflow: elide; }
     }
-    Text { text: root.metric.value; font-size: 20px; font-weight: 600; color: Theme.text; overflow: elide; }
+    Text { text: root.metric.value; font-size: 18px; font-weight: 600; color: Theme.text; overflow: elide; }
 }
 
 component ThinBar inherits Rectangle {
     in property <float> progress;
-    in property <brush> fill: #60CDFF;
+    in property <brush> fill: Theme.accent;
     height: 4px;
     border-radius: 2px;
     background: Theme.subtle-fill;
@@ -206,7 +217,7 @@ component ThinBar inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "batchviproc";
+    title: root.window-title;
     icon: @image-url("../assets/icon.png");
     preferred-width: 1120px;
     preferred-height: 860px;
@@ -218,8 +229,11 @@ export component AppWindow inherits Window {
     // ---- state pushed from Rust
     in property <string> status: "idle";
     in property <string> status-label: "Idle";
+    in property <string> window-title: "batchviproc";
     in property <bool> has-folder;
-    in property <string> folder-path: "No folder selected";
+    in property <bool> empty-folder;
+    in property <string> folder-title: "No folder selected";
+    in property <string> folder-path;
     in property <string> folder-summary: "Choose a folder to scan it for videos, including subfolders.";
     in property <bool> busy;
     in property <bool> processing;
@@ -316,14 +330,15 @@ export component AppWindow inherits Window {
                     alignment: center;
                     spacing: 2px;
                     horizontal-stretch: 1;
-                    Text { text: root.folder-path; font-size: 14px; font-weight: 600; color: Theme.text; overflow: elide; }
+                    Text { text: root.folder-title; font-size: 14px; font-weight: 600; color: Theme.text; overflow: elide; }
+                    if root.has-folder: Text { text: root.folder-path; font-size: 12px; color: Theme.text-tertiary; overflow: elide; }
                     Text { text: root.folder-summary; font-size: 12px; color: Theme.text-secondary; overflow: elide; }
                 }
                 VerticalLayout {
                     alignment: center;
                     Button {
                         text: root.has-folder ? "Change folder" : "Choose folder";
-                        primary: !root.has-folder;
+                        primary: !root.has-folder || root.empty-folder;
                         enabled: !root.busy;
                         clicked => { root.choose-folder(); }
                     }
@@ -370,7 +385,7 @@ export component AppWindow inherits Window {
                     SettingField {
                         glyph: "\u{E714}";
                         label: "Encoder";
-                        hint: "AV1 gives the smallest files (RTX 40 or newer).";
+                        hint: "AV1 makes the smallest files (RTX 40+).";
                         model: root.encoder-options;
                         current-index <=> root.encoder-index;
                         changed => { root.settings-changed(); }
@@ -378,7 +393,7 @@ export component AppWindow inherits Window {
                     SettingField {
                         glyph: "\u{E9F5}";
                         label: "Parallel jobs";
-                        hint: "How many videos are encoded at the same time.";
+                        hint: "Videos encoded at the same time.";
                         model: root.jobs-options;
                         current-index <=> root.jobs-index;
                         changed => { root.settings-changed(); }
@@ -388,7 +403,7 @@ export component AppWindow inherits Window {
                     SettingField {
                         glyph: "\u{E7B3}";
                         label: "Quality";
-                        hint: "Higher quality keeps more detail and saves less space.";
+                        hint: "More detail means less space saved.";
                         model: root.quality-options;
                         current-index <=> root.quality-index;
                         changed => { root.settings-changed(); }
@@ -406,19 +421,26 @@ export component AppWindow inherits Window {
         }
 
         // ---- metrics
-        if root.show-stats: VerticalLayout {
-            spacing: 12px;
-            HorizontalLayout {
-                spacing: 12px;
-                MetricTile { metric: root.metrics[0]; }
-                MetricTile { metric: root.metrics[1]; }
-                MetricTile { metric: root.metrics[2]; }
+        // One compact card: a single row of six figures when there is room (each needs
+        // ~140px for values like "190 fps (6.3x)"), otherwise two rows of three.
+        if root.show-stats: Card {
+            pad: 14px;
+            gap: 14px;
+            if root.width >= 1000px: HorizontalLayout {
+                spacing: 16px;
+                for metric in root.metrics: MetricCell { metric: metric; }
             }
-            HorizontalLayout {
-                spacing: 12px;
-                MetricTile { metric: root.metrics[3]; }
-                MetricTile { metric: root.metrics[4]; }
-                MetricTile { metric: root.metrics[5]; }
+            if root.width < 1000px: HorizontalLayout {
+                spacing: 16px;
+                MetricCell { metric: root.metrics[0]; }
+                MetricCell { metric: root.metrics[1]; }
+                MetricCell { metric: root.metrics[2]; }
+            }
+            if root.width < 1000px: HorizontalLayout {
+                spacing: 16px;
+                MetricCell { metric: root.metrics[3]; }
+                MetricCell { metric: root.metrics[4]; }
+                MetricCell { metric: root.metrics[5]; }
             }
         }
 
@@ -439,7 +461,7 @@ export component AppWindow inherits Window {
                     Text { text: worker.title; font-size: 13px; color: Theme.text; overflow: elide; horizontal-stretch: 1; }
                     Text { text: worker.meta; font-size: 12px; color: Theme.text-tertiary; horizontal-stretch: 0; }
                 }
-                ThinBar { progress: worker.progress; fill: Theme.success; }
+                ThinBar { progress: worker.progress; }
             }
         }
 
@@ -458,8 +480,8 @@ export component AppWindow inherits Window {
             Rectangle {
                 vertical-stretch: 1;
                 min-height: 120px;
-                background: #1C1C1C;
-                border-radius: 6px;
+                background: Theme.well-background;
+                border-radius: Theme.radius-small;
                 ListView {
                     property <int> revision: root.log-revision;
                     changed revision => {

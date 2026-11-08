@@ -66,7 +66,7 @@ fn new_engine(
 ) -> (Arc<Engine>, Arc<Recorder>) {
     let rec = Arc::new(Recorder::default());
     let ui = Box::new(RecorderUi(rec.clone()));
-    let engine = Engine::new(ui, root.join("appdata"), ffmpeg, rt.handle().clone());
+    let engine = Engine::new(ui, &root.join("appdata"), ffmpeg, rt.handle().clone());
     (engine, rec)
 }
 
@@ -149,7 +149,7 @@ fn full_batch_handles_every_file_kind() {
     let history = std::fs::read_to_string(root.join("appdata").join("processedFiles.txt")).unwrap();
     assert!(history.lines().count() >= 6);
     let (engine2, _) = new_engine(&rt, &root, ff);
-    rt.block_on(engine2.load_dir(videos.clone()));
+    rt.block_on(engine2.load_dir(videos));
     assert_eq!(engine2.snapshot().pending_files, 0);
 
     let _ = std::fs::remove_dir_all(&root);
@@ -247,7 +247,8 @@ fn pause_suspends_ffmpeg_and_resume_finishes() {
         assert_eq!(after.telemetry.total_fps, 0);
         assert_eq!(std::fs::metadata(&temp).map_or(0, |m| m.len()), size_before, "output grew while paused");
         assert_eq!(after.completed_this_run, 0);
-        assert_eq!(after.current_file, "a.mp4", "a new file started while paused");
+        let files: Vec<_> = after.telemetry.workers.iter().map(|w| w.file.as_str()).collect();
+        assert_eq!(files, ["a.mp4"], "a new file started while paused");
 
         engine.set_paused(false);
         assert_eq!(engine.snapshot().status, Status::Running);
@@ -261,7 +262,7 @@ fn pause_suspends_ffmpeg_and_resume_finishes() {
     assert_eq!(s.status, Status::Done, "{logs}");
     assert_eq!(s.compressed_this_run + s.skipped_larger_this_run, 2, "{logs}");
     assert_eq!(s.failed_this_run, 0, "{logs}");
-    assert!(logs.contains("Paused (1 ffmpeg process(es) suspended)"), "{logs}");
+    assert!(logs.contains("Paused (1 ffmpeg process suspended)"), "{logs}");
     assert!(logs.contains("Resumed"), "{logs}");
     assert!(!logs.contains("Stall watchdog"), "{logs}");
     let _ = std::fs::remove_dir_all(&root);
@@ -384,7 +385,7 @@ fn historical_problem_files_are_handled() {
 
     // Everything is remembered: a second scan finds nothing new.
     let (engine2, _) = new_engine(&rt, &root, ff);
-    rt.block_on(engine2.load_dir(videos.clone()));
+    rt.block_on(engine2.load_dir(videos));
     assert_eq!(engine2.snapshot().pending_files, 0, "{logs}");
 
     let _ = std::fs::remove_dir_all(&root);

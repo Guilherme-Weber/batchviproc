@@ -341,6 +341,9 @@ pub fn local_timestamp_compact() -> String {
 /// Returns true only for real animated GIFs: at least 16x16 and more than one frame.
 /// Static 1-frame GIFs and spacer GIFs (DOT.GIF, spacer.gif) return false.
 /// Reads in chunks and stops at the second frame marker, so large GIFs aren't loaded whole.
+/// Graphic Control Extension block header in a GIF stream.
+const GIF_GCE_MARKER: [u8; 3] = [0x21, 0xF9, 0x04];
+
 pub fn is_animated_and_valid_gif(mut reader: impl Read) -> bool {
     let mut header = [0u8; 13];
     if reader.read_exact(&mut header).is_err()
@@ -354,8 +357,7 @@ pub fn is_animated_and_valid_gif(mut reader: impl Read) -> bool {
         return false;
     }
 
-    // Count Graphic Control Extension blocks (0x21 0xF9 0x04): >1 means animated.
-    const MARKER: [u8; 3] = [0x21, 0xF9, 0x04];
+    // Count Graphic Control Extension blocks: more than one means animated.
     let mut buf = vec![0u8; 64 * 1024];
     let mut carry = 0usize; // bytes kept from the previous chunk so markers can span chunks
     let mut found = 0;
@@ -368,7 +370,7 @@ pub fn is_animated_and_valid_gif(mut reader: impl Read) -> bool {
         let window = &buf[..filled];
         let mut i = 0;
         while i + 3 <= filled {
-            if window[i..i + 3] == MARKER {
+            if window[i..i + 3] == GIF_GCE_MARKER {
                 found += 1;
                 if found >= 2 {
                     return true;

@@ -99,7 +99,6 @@ pub struct StateDto {
     pub skipped_larger_this_run: usize,
     pub failed_this_run: usize,
     pub space_saved_mb: f64,
-    pub current_file: String,
     pub telemetry: TelemetryDto,
 }
 
@@ -114,8 +113,6 @@ struct Inner {
     history_save_pending: bool,
     failed: HashSet<PathBuf>,
     in_progress: HashSet<PathBuf>,
-    /// Insertion-ordered list of files currently being encoded (for display).
-    active: Vec<PathBuf>,
     workers: BTreeMap<u32, WorkerProgress>,
     running_processes: usize,
     gpu_enc: f64,
@@ -183,8 +180,7 @@ fn is_generated_name(path: &Path) -> bool {
 
 fn is_orphan_temp(path: &Path) -> bool {
     path.file_name()
-        .map(|n| n.to_string_lossy().to_lowercase().contains(".batchviproc."))
-        .unwrap_or(false)
+        .is_some_and(|n| n.to_string_lossy().to_lowercase().contains(".batchviproc."))
 }
 
 /// Finds the ffmpeg binary: next to the executable (release zip), in the project's `bin/`
@@ -258,7 +254,6 @@ impl Inner {
     fn reset_run_tracking(&mut self) {
         self.failed.clear();
         self.in_progress.clear();
-        self.active.clear();
         self.workers.clear();
         self.space_saved_mb = 0.0;
     }
@@ -302,12 +297,6 @@ impl Inner {
             skipped_larger_this_run: self.run.skipped_larger,
             failed_this_run: self.run.failed,
             space_saved_mb: round1(self.space_saved_mb),
-            current_file: self
-                .active
-                .iter()
-                .map(|p| self.display_name(p))
-                .collect::<Vec<_>>()
-                .join("  |  "),
             telemetry: TelemetryDto {
                 total_fps: total_fps.round() as i64,
                 total_speed: round1(total_speed),
@@ -323,7 +312,7 @@ impl Inner {
 impl Engine {
     pub fn new(
         ui: Box<dyn Ui>,
-        data_dir: PathBuf,
+        data_dir: &Path,
         ffmpeg_path: PathBuf,
         rt: tokio::runtime::Handle,
     ) -> Arc<Self> {
@@ -343,7 +332,6 @@ impl Engine {
                 history_save_pending: false,
                 failed: HashSet::new(),
                 in_progress: HashSet::new(),
-                active: Vec::new(),
                 workers: BTreeMap::new(),
                 running_processes: 0,
                 gpu_enc: 0.0,
@@ -367,7 +355,7 @@ impl Engine {
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Runs blocking disk work off the async worker threads.
@@ -389,7 +377,7 @@ impl Engine {
     /// Broadcasts state to the UI; non-forced updates are throttled to one per 250 ms.
     pub fn send_state(self: &Arc<Self>, force: bool) {
         {
-            let mut emit = self.emit.lock().unwrap_or_else(|e| e.into_inner());
+            let mut emit = self.emit.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let recent = emit
                 .last_sent
                 .is_some_and(|t| t.elapsed() < STATE_THROTTLE);
@@ -601,8 +589,11 @@ impl Engine {
                 self.rt.spawn(async move { engine.run_worker(id, fatal).await })
             })
             .collect();
-        for handle in handles {
-            let _ = handle.await;
+        for (id, handle) in (1..).zip(handles) {
+            // A worker that panicked must not vanish silently (release builds abort instead).
+            if let Err(err) = handle.await {
+                self.log(format!("[Worker {id}] stopped unexpectedly: {err}"));
+            }
         }
 
         let (was_stopped, status, run, saved) = {
@@ -614,7 +605,6 @@ impl Engine {
             inner.power = None;
             inner.gpu_enc = 0.0;
             inner.gpu_vram_mb = 0.0;
-            inner.active.clear();
             inner.in_progress.clear();
             inner.workers.clear();
             inner.rebuild_queue();
@@ -666,17 +656,20 @@ impl Engine {
     pub fn stop(self: &Arc<Self>) {
         let running = {
             let mut inner = self.lock();
-            if !inner.working {
-                None
-            } else {
+            if inner.working {
                 inner.stop_requested = true;
                 inner.status = Status::Stopping;
                 inner.cancel.cancel();
                 Some(inner.running_processes)
+            } else {
+                None
             }
         };
         if let Some(n) = running {
-            self.log(format!("Stopping {n} active ffmpeg process(es)..."));
+            self.log(match n {
+                1 => "Stopping 1 active ffmpeg process...".to_string(),
+                n => format!("Stopping {n} active ffmpeg processes..."),
+            });
         }
         self.send_state(true);
     }
@@ -709,7 +702,11 @@ impl Engine {
             inner.running_processes
         };
         self.log(if pause {
-            format!("Paused ({active} ffmpeg process(es) suspended). Press Resume to continue.")
+            match active {
+                0 => "Paused. Press Resume to continue.".to_string(),
+                1 => "Paused (1 ffmpeg process suspended). Press Resume to continue.".to_string(),
+                n => format!("Paused ({n} ffmpeg processes suspended). Press Resume to continue."),
+            }
         } else {
             "Resumed".to_string()
         });
@@ -823,7 +820,6 @@ impl Engine {
 
     fn release_tracking(&self, worker_id: u32, input: &Path) {
         let mut inner = self.lock();
-        inner.active.retain(|p| p != input);
         inner.in_progress.remove(input);
         inner.workers.remove(&worker_id);
     }
@@ -861,8 +857,7 @@ impl Engine {
             let valid = self
                 .blocking(move || {
                     std::fs::File::open(&path)
-                        .map(|f| system::is_animated_and_valid_gif(std::io::BufReader::new(f)))
-                        .unwrap_or(false)
+                        .is_ok_and(|f| system::is_animated_and_valid_gif(std::io::BufReader::new(f)))
                 })
                 .await;
             if !valid {
@@ -882,7 +877,6 @@ impl Engine {
         }
 
         let tmp = args::temp_name(&input, worker_id);
-        self.lock().active.push(input.clone());
         self.reset_worker(worker_id, display.clone());
         self.log_remove(&tmp);
         self.send_state(true);
@@ -1073,7 +1067,9 @@ impl Engine {
 
         let in_ext = args::ext_lower(&input);
         let tmp_ext = args::ext_lower(&tmp);
-        let final_target = if in_ext != tmp_ext {
+        let final_target = if in_ext == tmp_ext {
+            input.clone()
+        } else {
             let stem = input
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
@@ -1083,8 +1079,6 @@ impl Engine {
                 .map(|e| format!(".{}", e.to_string_lossy()))
                 .unwrap_or_default();
             input.with_file_name(format!("{stem}{ext}"))
-        } else {
-            input.clone()
         };
 
         if final_target != input && final_target.exists() {
@@ -1200,20 +1194,19 @@ impl Engine {
 
         // Wait for enough free memory before adding another encoder.
         // Encoders start one at a time; show why a worker sits at 0% meanwhile.
-        let permit = match self.admission.clone().try_lock_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                self.reset_worker(worker_id, format!("{display} (waiting to start)"));
-                self.send_state(false);
-                let permit = tokio::select! {
-                    permit = self.admission.clone().lock_owned() => permit,
-                    _ = cancel.cancelled() => {
-                        return Attempt { status: AttemptStatus::Stopped, diag };
-                    }
-                };
-                self.reset_worker(worker_id, display.to_string());
-                permit
-            }
+        let permit = if let Ok(permit) = self.admission.clone().try_lock_owned() {
+            permit
+        } else {
+            self.reset_worker(worker_id, format!("{display} (waiting to start)"));
+            self.send_state(false);
+            let permit = tokio::select! {
+                permit = self.admission.clone().lock_owned() => permit,
+                _ = cancel.cancelled() => {
+                    return Attempt { status: AttemptStatus::Stopped, diag };
+                }
+            };
+            self.reset_worker(worker_id, display.to_string());
+            permit
         };
         // A retry (AAC / CPU fallback) may come up while the batch is paused.
         if self.is_paused() {
@@ -1380,12 +1373,9 @@ fn scan_folder(dir: &Path) -> ScanResult {
         .filter_entry(|e| e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.'));
 
     for entry in walker {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                unreadable += 1;
-                continue;
-            }
+        let Ok(entry) = entry else {
+            unreadable += 1;
+            continue;
         };
         if !entry.file_type().is_file() || !args::is_video_file(entry.path()) {
             continue;

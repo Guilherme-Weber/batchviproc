@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 slint::include_modules!();
 
@@ -148,12 +148,12 @@ impl Ui for SlintUi {
     fn log(&self, message: String) {
         self.file_log.write_line(&message);
         let line = format!("[{}] {message}", system::local_time_hms());
-        self.inbox.logs.lock().unwrap().push(line);
+        self.inbox.logs.lock().unwrap_or_else(PoisonError::into_inner).push(line);
         self.schedule();
     }
 
     fn state(&self, state: &StateDto) {
-        *self.inbox.state.lock().unwrap() = Some(state.clone());
+        *self.inbox.state.lock().unwrap_or_else(PoisonError::into_inner) = Some(state.clone());
         self.schedule();
     }
 }
@@ -181,13 +181,62 @@ struct Controller {
     log_revision: i32,
     taskbar: Option<Taskbar>,
     taskbar_tried: bool,
+    clock: RunClock,
+}
+
+/// Elapsed processing time of the current batch, not counting time spent paused.
+#[derive(Default)]
+struct RunClock {
+    banked: std::time::Duration,
+    running_since: Option<std::time::Instant>,
+    active: bool,
+}
+
+impl RunClock {
+    fn update(&mut self, status: Status) {
+        let ticking = status == Status::Running;
+        let in_batch = matches!(status, Status::Running | Status::Paused | Status::Stopping);
+        if in_batch && !self.active {
+            *self = RunClock { active: true, ..RunClock::default() };
+        }
+        if !in_batch {
+            self.active = false;
+        }
+        match (ticking, self.running_since) {
+            (true, None) => self.running_since = Some(std::time::Instant::now()),
+            (false, Some(t)) => {
+                self.banked += t.elapsed();
+                self.running_since = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn elapsed(&self) -> std::time::Duration {
+        self.banked + self.running_since.map(|t| t.elapsed()).unwrap_or_default()
+    }
+}
+
+/// 75 s -> "1:15", 3725 s -> "1:02:05"
+fn format_duration(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// "1 video" / "3 videos"
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", group_thousands(n), if n == 1 { one } else { many })
 }
 
 impl Controller {
     fn drain(&mut self) {
         self.inbox.scheduled.store(false, Ordering::Release);
-        let state = self.inbox.state.lock().unwrap().take();
-        let logs = std::mem::take(&mut *self.inbox.logs.lock().unwrap());
+        let state = self.inbox.state.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let logs = std::mem::take(&mut *self.inbox.logs.lock().unwrap_or_else(PoisonError::into_inner));
 
         if !logs.is_empty() {
             for line in logs {
@@ -214,6 +263,7 @@ impl Controller {
         let Some(w) = self.window.upgrade() else {
             return;
         };
+        self.clock.update(self.state.status);
         let s = &self.state;
         let busy = matches!(
             s.status,
@@ -225,10 +275,22 @@ impl Controller {
         let has_run = s.run_total > 0 || s.completed_this_run > 0;
         let has_logs = self.log_model.row_count() > 0;
 
-        w.set_status(status_key(s.status).into());
-        w.set_status_label(status_label(s.status).into());
+        // A scanned folder without videos has nothing to start: not "Ready".
+        let empty_folder = s.status == Status::Ready && s.total_files == 0;
+        if empty_folder {
+            w.set_status("idle".into());
+            w.set_status_label("No videos".into());
+        } else {
+            w.set_status(status_key(s.status).into());
+            w.set_status_label(status_label(s.status).into());
+        }
         w.set_has_folder(has_folder);
-        w.set_folder_path(s.dir.as_deref().unwrap_or("No folder selected").into());
+        w.set_empty_folder(empty_folder);
+        w.set_folder_title(match s.dir.as_deref() {
+            Some(dir) => folder_name(dir).into(),
+            None => "No folder selected".into(),
+        });
+        w.set_folder_path(s.dir.as_deref().unwrap_or_default().into());
         w.set_folder_summary(if has_folder || s.status == Status::Scanning {
             file_count_text(s).into()
         } else {
@@ -258,9 +320,9 @@ impl Controller {
             "—".into()
         };
         let gpu = if processing {
-            format!("{}% | {} GB", t.nvenc_util, t.vram_gb)
+            format!("{}% · {} GB", t.nvenc_util, t.vram_gb)
         } else {
-            "0% | 0 GB".into()
+            "—".into()
         };
         let metrics = [
             ("Queued", s.pending_files.to_string(), "\u{E8FD}"),
@@ -291,11 +353,27 @@ impl Controller {
         };
         w.set_overall_progress(fraction as f32);
         w.set_overall_percent(format!("{}%", (fraction * 100.0).round()).into());
-        w.set_current_file(if s.current_file.is_empty() {
-            idle_file_text(s).as_str().into()
+        // While processing, the worker rows name the files; this line gives the time.
+        w.set_current_file(if processing {
+            let elapsed = format_duration(self.clock.elapsed());
+            let left = plural(s.run_total.saturating_sub(s.completed_this_run), "file", "files");
+            match s.status {
+                Status::Paused => format!("Paused · {elapsed} elapsed · {left} left"),
+                Status::Stopping => "Stopping…".to_string(),
+                _ => format!("{elapsed} elapsed · {left} left"),
+            }
+            .into()
         } else {
-            s.current_file.as_str().into()
+            idle_file_text(s).as_str().into()
         });
+        // The taskbar thumbnail and Alt+Tab show progress while a batch runs.
+        let pct = (fraction * 100.0).round();
+        w.set_window_title(match s.status {
+            Status::Running => format!("{pct}% · batchviproc"),
+            Status::Paused => format!("Paused {pct}% · batchviproc"),
+            _ => "batchviproc".to_string(),
+        }
+        .into());
         let workers = if processing {
             t.workers
                 .iter()
@@ -383,7 +461,7 @@ impl Launch {
     }
 }
 
-pub fn run(data_dir: PathBuf, launch: Launch) -> Result<(), slint::PlatformError> {
+pub fn run(data_dir: &Path, launch: Launch) -> Result<(), slint::PlatformError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -400,7 +478,7 @@ pub fn run(data_dir: PathBuf, launch: Launch) -> Result<(), slint::PlatformError
             inbox: inbox.clone(),
             file_log: crate::logfile::FileLog::open(&data_dir.join("logs")),
         }),
-        data_dir.clone(),
+        data_dir,
         crate::engine::locate_ffmpeg(),
         runtime.handle().clone(),
     );
@@ -433,6 +511,7 @@ pub fn run(data_dir: PathBuf, launch: Launch) -> Result<(), slint::PlatformError
             log_revision: 0,
             taskbar: None,
             taskbar_tried: false,
+            clock: RunClock::default(),
         });
     });
 
@@ -517,7 +596,7 @@ pub fn run(data_dir: PathBuf, launch: Launch) -> Result<(), slint::PlatformError
                     prefs.concurrency = 2;
                 }
                 prefs.apply_to_window(&w);
-                *last_encoder.borrow_mut() = prefs.encoder.clone();
+                last_encoder.borrow_mut().clone_from(&prefs.encoder);
             }
             prefs.save(&prefs_path);
         });
@@ -609,27 +688,23 @@ fn file_count_text(s: &StateDto) -> String {
         return "Scanning folder…".into();
     }
     if s.total_files == 0 {
-        return "No videos found".into();
+        return "No videos in this folder or its subfolders. Choose another folder.".into();
     }
     let mut parts = vec![
-        format!("{} videos found", s.total_files),
-        format!("{} ready", s.pending_files),
+        plural(s.total_files, "video found", "videos found"),
+        format!("{} ready", group_thousands(s.pending_files)),
     ];
     if s.skipped_known > 0 {
-        parts.push(format!("{} already processed", s.skipped_known));
+        parts.push(format!("{} already processed", group_thousands(s.skipped_known)));
     }
     if s.skipped_generated > 0 {
-        parts.push(format!("{} ignored", s.skipped_generated));
+        parts.push(format!("{} ignored", group_thousands(s.skipped_generated)));
     }
     parts.join(" · ")
 }
 
 fn history_text(count: usize) -> String {
-    if count == 1 {
-        "1 processed file is remembered".into()
-    } else {
-        format!("{} processed files are remembered", group_thousands(count))
-    }
+    format!("{} remembered", plural(count, "processed file is", "processed files are"))
 }
 
 /// 337426 -> "337,426"
@@ -643,6 +718,13 @@ fn group_thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// Last path component ("D:\\Videos\\Trip" -> "Trip"); a drive root stays as it is.
+fn folder_name(dir: &str) -> String {
+    Path::new(dir)
+        .file_name()
+        .map_or_else(|| dir.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 fn idle_file_text(s: &StateDto) -> String {
@@ -680,6 +762,18 @@ mod tests {
         let l = Launch::from_args(["--verbose", "--start", r"D:\Videos"].map(String::from).into_iter());
         assert!(l.start);
         assert_eq!(l.folder, Some(PathBuf::from(r"D:\Videos")));
+    }
+
+    #[test]
+    fn plurals_durations_and_folder_names() {
+        assert_eq!(plural(1, "video", "videos"), "1 video");
+        assert_eq!(plural(1200, "video", "videos"), "1,200 videos");
+        assert_eq!(history_text(1), "1 processed file is remembered");
+        assert_eq!(history_text(337426), "337,426 processed files are remembered");
+        assert_eq!(format_duration(std::time::Duration::from_secs(75)), "1:15");
+        assert_eq!(format_duration(std::time::Duration::from_secs(3725)), "1:02:05");
+        assert_eq!(folder_name(r"D:\Videos\Family 2024"), "Family 2024");
+        assert_eq!(folder_name(r"D:\"), r"D:\");
     }
 
     #[test]

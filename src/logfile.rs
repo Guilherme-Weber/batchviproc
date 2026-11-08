@@ -32,7 +32,7 @@ impl FileLog {
 
     fn open_file(path: &Path) -> Option<(File, u64)> {
         let file = OpenOptions::new().create(true).append(true).open(path).ok()?;
-        let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let size = file.metadata().map_or(0, |m| m.len());
         Some((file, size))
     }
 
@@ -40,7 +40,7 @@ impl FileLog {
     /// logging must not break processing.
     pub fn write_line(&self, message: &str) {
         let line = format!("{} {message}\r\n", system::local_datetime());
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.as_ref().is_some_and(|(_, size)| *size + line.len() as u64 > MAX_LOG_BYTES) {
             *state = None; // close before renaming
             let _ = fs::rename(&self.path, &self.rotated);

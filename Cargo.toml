@@ -3,7 +3,7 @@ name = "batchviproc"
 version = "2.0.0"
 description = "Desktop batch video compression tool"
 license = "MIT"
-repository = "https://github.com/kachurovskiy/batchviproc"
+repository = "https://github.com/Guilherme-Weber/batchviproc"
 edition = "2021"
 
 [dependencies]
@@ -15,13 +15,27 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10"
 slint = { version = "1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-2", "accessibility", "raw-window-handle-06"] }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "time", "sync", "macros", "io-util", "fs"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "time", "sync", "macros", "io-util"] }
 tokio-util = "0.7.20"
 walkdir = "2.5.0"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Power", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+# Lint policy (checked by `cargo clippy --all-targets --locked -- -D warnings`).
+# Beyond the default set, these selected pedantic lints keep the code idiomatic.
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+assigning_clones = "warn"
+if_not_else = "warn"
+ignore_without_reason = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+redundant_closure_for_method_calls = "warn"
+single_match_else = "warn"
 
 [build-dependencies]
 slint-build = "1.18.1"
