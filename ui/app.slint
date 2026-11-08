@@ -1,0 +1,488 @@
+// batchviproc interface: Windows 11 Fluent design (dark), rendered by Slint's software renderer.
+
+import { Button, ComboBox, ProgressIndicator, ListView, ScrollView, Palette } from "std-widgets.slint";
+
+export struct WorkerRow {
+    title: string,
+    meta: string,
+    progress: float,
+}
+
+export struct Metric {
+    label: string,
+    value: string,
+    glyph: string,
+}
+
+// Design tokens (Windows 11 dark theme values).
+export global Theme {
+    in property <string> icon-font: "Segoe Fluent Icons";
+    out property <brush> window-background: #202020;
+    out property <brush> card-background: #2B2B2B;
+    out property <brush> card-stroke: #1C1C1C;
+    out property <brush> subtle-fill: #FFFFFF0F;
+    out property <brush> text: #FFFFFF;
+    out property <brush> text-secondary: #FFFFFFC9;
+    out property <brush> text-tertiary: #FFFFFF8A;
+    out property <brush> accent: Palette.accent-background;
+    out property <color> success: #6CCB5F;
+    out property <color> caution: #FCE100;
+    out property <color> critical: #FF99A4;
+    out property <color> neutral: #9D9D9D;
+    out property <length> radius: 8px;
+}
+
+// Icon from the Segoe Fluent Icons font. Decorative: hidden from screen readers.
+component Glyph inherits Text {
+    in property <string> glyph;
+    text: glyph;
+    accessible-role: none;
+    font-family: Theme.icon-font;
+    font-size: 16px;
+    color: Theme.text;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+}
+
+component Card inherits Rectangle {
+    in property <length> pad: 16px;
+    in property <length> gap: 12px;
+    background: Theme.card-background;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.card-stroke;
+    vertical-stretch: 0;
+    VerticalLayout {
+        padding: root.pad;
+        spacing: root.gap;
+        @children
+    }
+}
+
+component SectionTitle inherits HorizontalLayout {
+    in property <string> glyph;
+    in property <string> text;
+    spacing: 10px;
+    Glyph { glyph: root.glyph; font-size: 16px; color: Theme.text-secondary; width: 18px; }
+    Text { text: root.text; font-size: 15px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+}
+
+component StatusPill inherits Rectangle {
+    in property <string> status;
+    in property <string> label;
+    property <color> tone: status == "error" ? Theme.critical
+        : (status == "stopping" || status == "paused") ? Theme.caution
+        : (status == "ready" || status == "done") ? Theme.success
+        : status == "idle" ? Theme.neutral
+        : #60CDFF;
+    background: tone.with-alpha(0.12);
+    border-color: tone.with-alpha(0.45);
+    border-width: 1px;
+    border-radius: self.height / 2;
+    height: 28px;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.tone;
+            }
+        }
+        Text { text: root.label; color: root.tone; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+    }
+}
+
+component IconTile inherits Rectangle {
+    in property <string> glyph;
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    background: #60CDFF1F;
+    Glyph { glyph: root.glyph; font-size: 20px; color: #60CDFF; }
+}
+
+// Text-style button: reachable with Tab, activated with Enter/Space, announced as a button.
+component LinkText inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    border-radius: 4px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: #60CDFF;
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        Text {
+            text: root.text;
+            color: !root.enabled ? Theme.text-tertiary : touch.has-hover ? #99EBFF : #60CDFF;
+            font-size: 13px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            focus.focus();
+            root.clicked();
+        }
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+component SettingField inherits VerticalLayout {
+    in property <string> glyph;
+    in property <string> label;
+    in property <string> hint;
+    in property <[string]> model;
+    in-out property <int> current-index;
+    in property <bool> enabled: true;
+    callback changed();
+    spacing: 6px;
+    HorizontalLayout {
+        spacing: 8px;
+        Glyph { glyph: root.glyph; font-size: 14px; color: Theme.text-secondary; width: 16px; }
+        Text { text: root.label; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+    }
+    ComboBox {
+        model: root.model;
+        current-index <=> root.current-index;
+        enabled: root.enabled;
+        selected => { root.changed(); }
+    }
+    Text { text: root.hint; font-size: 12px; color: Theme.text-tertiary; wrap: word-wrap; }
+}
+
+component MetricTile inherits Card {
+    in property <Metric> metric;
+    pad: 14px;
+    gap: 6px;
+    // Same preferred width and stretch for every tile, so each row splits evenly.
+    preferred-width: 200px;
+    min-width: 0px;
+    horizontal-stretch: 1;
+    HorizontalLayout {
+        spacing: 8px;
+        Glyph { glyph: root.metric.glyph; font-size: 13px; color: Theme.text-tertiary; width: 14px; }
+        Text { text: root.metric.label; font-size: 12px; color: Theme.text-secondary; vertical-alignment: center; overflow: elide; }
+    }
+    Text { text: root.metric.value; font-size: 20px; font-weight: 600; color: Theme.text; overflow: elide; }
+}
+
+component ThinBar inherits Rectangle {
+    in property <float> progress;
+    in property <brush> fill: #60CDFF;
+    height: 4px;
+    border-radius: 2px;
+    background: Theme.subtle-fill;
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.progress, 0, 1);
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: root.fill;
+        animate width { duration: 250ms; easing: ease-out; }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "batchviproc";
+    icon: @image-url("../assets/icon.png");
+    preferred-width: 1120px;
+    preferred-height: 860px;
+    min-width: 780px;
+    min-height: 640px;
+    background: Theme.window-background;
+    default-font-size: 14px;
+
+    // ---- state pushed from Rust
+    in property <string> status: "idle";
+    in property <string> status-label: "Idle";
+    in property <bool> has-folder;
+    in property <string> folder-path: "No folder selected";
+    in property <string> folder-summary: "Choose a folder to scan it for videos, including subfolders.";
+    in property <bool> busy;
+    in property <bool> processing;
+    in property <bool> can-start;
+    in property <bool> stop-enabled;
+    in property <bool> paused;
+    in property <bool> show-options;
+    in property <bool> show-stats;
+    in property <bool> show-log;
+    in property <bool> show-history;
+    in property <string> history-text;
+    in property <[Metric]> metrics: [
+        { label: "Queued", value: "0", glyph: "\u{E8FD}" }, { label: "Completed", value: "0/0", glyph: "\u{E73E}" },
+        { label: "Saved", value: "0 MB", glyph: "\u{E74E}" }, { label: "Speed", value: "—", glyph: "\u{EC4A}" },
+        { label: "NVENC / VRAM", value: "0% | 0 GB", glyph: "\u{E950}" }, { label: "Failed", value: "0", glyph: "\u{E783}" },
+    ];
+    in property <float> overall-progress;
+    in property <string> overall-percent: "0%";
+    in property <string> current-file: "No active file";
+    in property <[WorkerRow]> workers;
+    in property <[string]> log-lines;
+
+    // ---- settings (two-way with Rust)
+    in property <[string]> encoder-options;
+    in property <[string]> jobs-options;
+    in property <[string]> quality-options;
+    in property <[string]> speed-options;
+    in-out property <int> encoder-index;
+    in-out property <int> jobs-index;
+    in-out property <int> quality-index;
+    in-out property <int> speed-index;
+
+    callback choose-folder();
+    callback start();
+    callback stop();
+    callback toggle-pause();
+    callback forget-history();
+    callback clear-log();
+    callback open-logs();
+    callback settings-changed();
+
+    // Incremented by Rust after new log lines arrive; the log view scrolls to the end.
+    in property <int> log-revision;
+
+    // Scrollable page: everything stays reachable even at the minimum window size.
+    // The content column is centered and at most 1000px wide; when the window is taller than
+    // the content, the activity card stretches to fill it.
+    page := ScrollView {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        content-width: self.visible-width;
+        content-height: max(self.visible-height, column.preferred-height);
+
+    column := VerticalLayout {
+        width: page.visible-width;
+        height: page.content-height;
+        padding-top: 20px;
+        padding-bottom: 20px;
+        padding-left: max(24px, (page.visible-width - 1000px) / 2);
+        padding-right: max(24px, (page.visible-width - 1000px) / 2);
+        spacing: 14px;
+
+        // ---- header
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                Image { source: @image-url("../assets/icon.png"); width: 36px; height: 36px; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text { text: "batchviproc"; font-size: 22px; font-weight: 600; color: Theme.text; }
+                Text { text: "Batch video compression"; font-size: 12px; color: Theme.text-secondary; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.status != "idle": VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                StatusPill { status: root.status; label: root.status-label; horizontal-stretch: 0; }
+            }
+        }
+
+        // ---- source folder + primary actions
+        Card {
+            HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    alignment: center;
+                    IconTile { glyph: "\u{E8B7}"; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    Text { text: root.folder-path; font-size: 14px; font-weight: 600; color: Theme.text; overflow: elide; }
+                    Text { text: root.folder-summary; font-size: 12px; color: Theme.text-secondary; overflow: elide; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: root.has-folder ? "Change folder" : "Choose folder";
+                        primary: !root.has-folder;
+                        enabled: !root.busy;
+                        clicked => { root.choose-folder(); }
+                    }
+                }
+                if root.processing: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: root.paused ? "Resume" : "Pause";
+                        primary: root.paused;
+                        enabled: root.stop-enabled;
+                        clicked => { root.toggle-pause(); }
+                    }
+                }
+                if root.processing: VerticalLayout {
+                    alignment: center;
+                    Button { text: "Stop"; enabled: root.stop-enabled; clicked => { root.stop(); } }
+                }
+                if root.show-options: VerticalLayout {
+                    alignment: center;
+                    Button { text: "Start"; primary: true; enabled: root.can-start; clicked => { root.start(); } }
+                }
+            }
+            if root.show-history: HorizontalLayout {
+                spacing: 12px;
+                Glyph { glyph: "\u{E81C}"; font-size: 13px; color: Theme.text-tertiary; width: 14px; }
+                Text { text: root.history-text; font-size: 13px; color: Theme.text-tertiary; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                LinkText {
+                    text: "Forget processed history";
+                    enabled: !root.busy;
+                    clicked => { root.forget-history(); }
+                }
+            }
+        }
+
+        // ---- encoding settings
+        if root.show-options: Card {
+            gap: 16px;
+            SectionTitle { glyph: "\u{E713}"; text: "Encoding settings"; }
+            GridLayout {
+                spacing-horizontal: 24px;
+                spacing-vertical: 16px;
+                Row {
+                    SettingField {
+                        glyph: "\u{E714}";
+                        label: "Encoder";
+                        hint: "AV1 gives the smallest files (RTX 40 or newer).";
+                        model: root.encoder-options;
+                        current-index <=> root.encoder-index;
+                        changed => { root.settings-changed(); }
+                    }
+                    SettingField {
+                        glyph: "\u{E9F5}";
+                        label: "Parallel jobs";
+                        hint: "How many videos are encoded at the same time.";
+                        model: root.jobs-options;
+                        current-index <=> root.jobs-index;
+                        changed => { root.settings-changed(); }
+                    }
+                }
+                Row {
+                    SettingField {
+                        glyph: "\u{E7B3}";
+                        label: "Quality";
+                        hint: "Higher quality keeps more detail and saves less space.";
+                        model: root.quality-options;
+                        current-index <=> root.quality-index;
+                        changed => { root.settings-changed(); }
+                    }
+                    SettingField {
+                        glyph: "\u{EC4A}";
+                        label: "Encoding speed";
+                        hint: "Slower presets compress better.";
+                        model: root.speed-options;
+                        current-index <=> root.speed-index;
+                        changed => { root.settings-changed(); }
+                    }
+                }
+            }
+        }
+
+        // ---- metrics
+        if root.show-stats: VerticalLayout {
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 12px;
+                MetricTile { metric: root.metrics[0]; }
+                MetricTile { metric: root.metrics[1]; }
+                MetricTile { metric: root.metrics[2]; }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                MetricTile { metric: root.metrics[3]; }
+                MetricTile { metric: root.metrics[4]; }
+                MetricTile { metric: root.metrics[5]; }
+            }
+        }
+
+        // ---- progress
+        if root.show-stats: Card {
+            HorizontalLayout {
+                SectionTitle { glyph: "\u{E9D9}"; text: "Progress"; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.overall-percent; font-size: 15px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+            }
+            Text { text: root.current-file; font-size: 13px; color: Theme.text-secondary; overflow: elide; }
+            ThinBar { progress: root.overall-progress; height: 6px; border-radius: 3px; }
+            for worker in root.workers: VerticalLayout {
+                spacing: 6px;
+                padding-top: 4px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: worker.title; font-size: 13px; color: Theme.text; overflow: elide; horizontal-stretch: 1; }
+                    Text { text: worker.meta; font-size: 12px; color: Theme.text-tertiary; horizontal-stretch: 0; }
+                }
+                ThinBar { progress: worker.progress; fill: Theme.success; }
+            }
+        }
+
+        // ---- activity log
+        if root.show-log: Card {
+            vertical-stretch: 1;
+            HorizontalLayout {
+                SectionTitle { glyph: "\u{E7C3}"; text: "Activity"; }
+                Rectangle { horizontal-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    LinkText { text: "Open log folder"; clicked => { root.open-logs(); } }
+                    Button { text: "Clear"; clicked => { root.clear-log(); } }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 120px;
+                background: #1C1C1C;
+                border-radius: 6px;
+                ListView {
+                    property <int> revision: root.log-revision;
+                    changed revision => {
+                        self.content-y = min(0px, self.visible-height - self.content-height);
+                    }
+                    for line in root.log-lines: HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-top: 1px;
+                        padding-bottom: 1px;
+                        Text {
+                            text: line;
+                            font-family: "Consolas";
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !root.show-log: Rectangle { vertical-stretch: 1; }
+    }
+    }
+}
